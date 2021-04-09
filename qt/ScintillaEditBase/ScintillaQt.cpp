@@ -8,12 +8,8 @@
 // Additions Copyright (c) 2011 Archaeopteryx Software, Inc. d/b/a Wingware
 // ScintillaQt.cpp - Qt specific subclass of ScintillaBase
 
-#include "PlatQt.h"
 #include "ScintillaQt.h"
-#ifdef SCI_LEXER
-#include "LexerModule.h"
-#include "ExternalLexer.h"
-#endif
+#include "PlatQt.h"
 
 #include <QApplication>
 #include <QDrag>
@@ -22,13 +18,11 @@
 #endif
 #include <QMimeData>
 #include <QMenu>
+#include <QTextCodec>
 #include <QScrollBar>
 #include <QTimer>
-#include <QTextCodec>
 
-#ifdef SCI_NAMESPACE
 using namespace Scintilla;
-#endif
 
 
 ScintillaQt::ScintillaQt(QAbstractScrollArea *parent)
@@ -38,26 +32,22 @@ ScintillaQt::ScintillaQt(QAbstractScrollArea *parent)
 
 	wMain = scrollArea->viewport();
 
-	imeInteraction = imeInline;
+	imeInteraction = IMEInteraction::internal;
 
 	// On OS X drawing text into a pixmap moves it around 1 pixel to
 	// the right compared to drawing it directly onto a window.
 	// Buffered drawing turned off by default to avoid this.
-	WndProc(SCI_SETBUFFEREDDRAW, false, 0);
+	view.bufferedDraw = false;
 
 	Init();
 
-	for (TickReason tr = tickCaret; tr <= tickDwell; tr = static_cast<TickReason>(tr + 1)) {
-		timers[tr] = 0;
-	}
+	std::fill(timers, std::end(timers), 0);
 }
 
 ScintillaQt::~ScintillaQt()
 {
-	for (TickReason tr = tickCaret; tr <= tickDwell; tr = static_cast<TickReason>(tr + 1)) {
-		FineTickerCancel(tr);
-	}
-	SetIdle(false);
+	CancelTimers();
+	ChangeIdle(false);
 }
 
 void ScintillaQt::execCommand(QAction *action)
@@ -69,6 +59,8 @@ void ScintillaQt::execCommand(QAction *action)
 #if defined(Q_OS_WIN)
 static const QString sMSDEVColumnSelect("MSDEVColumnSelect");
 static const QString sWrappedMSDEVColumnSelect("application/x-qt-windows-mime;value=\"MSDEVColumnSelect\"");
+static const QString sVSEditorLineCutCopy("VisualStudioEditorOperationsLineCutCopyClipboardTag");
+static const QString sWrappedVSEditorLineCutCopy("application/x-qt-windows-mime;value=\"VisualStudioEditorOperationsLineCutCopyClipboardTag\"");
 #elif defined(Q_OS_MAC)
 static const QString sScintillaRecPboardType("com.scintilla.utf16-plain-text.rectangular");
 static const QString sScintillaRecMimeType("text/x-scintilla.utf16-plain-text.rectangular");
@@ -130,11 +122,7 @@ static ScintillaRectangularMime *singletonMime = 0;
 
 void ScintillaQt::Init()
 {
-#if defined(Q_OS_WIN) || defined(Q_OS_MAC)
 	rectangularSelectionModifier = SCMOD_ALT;
-#else
-	rectangularSelectionModifier = SCMOD_CTRL;
-#endif
 
 #if defined(Q_OS_MAC) && QT_VERSION < QT_VERSION_CHECK(5, 0, 0)
 	if (!singletonMime) {
@@ -151,9 +139,7 @@ void ScintillaQt::Init()
 
 void ScintillaQt::Finalise()
 {
-	for (TickReason tr = tickCaret; tr <= tickDwell; tr = static_cast<TickReason>(tr + 1)) {
-		FineTickerCancel(tr);
-	}
+	CancelTimers();
 	ScintillaBase::Finalise();
 }
 
@@ -185,7 +171,7 @@ static QString StringFromSelectedText(const SelectionText &selectedText)
 	}
 }
 
-static void AddRectangularToMime(QMimeData *mimeData, QString su)
+static void AddRectangularToMime(QMimeData *mimeData, [[maybe_unused]] QString su)
 {
 #if defined(Q_OS_WIN)
 	// Add an empty marker
@@ -196,10 +182,17 @@ static void AddRectangularToMime(QMimeData *mimeData, QString su)
 	// clipboard format is supposed to be UTF-16, not UTF-8.
 	mimeData->setData(sScintillaRecMimeType, su.toUtf8());
 #else
-	Q_UNUSED(su);
 	// Linux
 	// Add an empty marker
 	mimeData->setData(sMimeRectangularMarker, QByteArray());
+#endif
+}
+
+static void AddLineCutCopyToMime([[maybe_unused]] QMimeData *mimeData)
+{
+#if defined(Q_OS_WIN)
+	// Add an empty marker
+	mimeData->setData(sVSEditorLineCutCopy, QByteArray());
 #endif
 }
 
@@ -227,6 +220,23 @@ static bool IsRectangularInMime(const QMimeData *mimeData)
 	return false;
 }
 
+static bool IsLineCutCopyInMime(const QMimeData *mimeData)
+{
+	QStringList formats = mimeData->formats();
+	for (int i = 0; i < formats.size(); ++i) {
+#if defined(Q_OS_WIN)
+		// Visual Studio Line Cut/Copy markers
+		// If line cut/copy made by this application, see base name.
+		if (formats[i] == sVSEditorLineCutCopy)
+			return true;
+		// Otherwise see wrapped name.
+		if (formats[i] == sWrappedVSEditorLineCutCopy)
+			return true;
+#endif
+	}
+	return false;
+}
+
 bool ScintillaQt::ValidCodePage(int codePage) const
 {
 	return codePage == 0
@@ -238,6 +248,28 @@ bool ScintillaQt::ValidCodePage(int codePage) const
 	|| codePage == 1361;
 }
 
+std::string ScintillaQt::UTF8FromEncoded(std::string_view encoded) const {
+	if (IsUnicodeMode()) {
+		return std::string(encoded);
+	} else {
+		QTextCodec *codec = QTextCodec::codecForName(
+				CharacterSetID(CharacterSetOfDocument()));
+		QString text = codec->toUnicode(encoded.data(), static_cast<int>(encoded.length()));
+		return text.toStdString();
+	}
+}
+
+std::string ScintillaQt::EncodedFromUTF8(std::string_view utf8) const {
+	if (IsUnicodeMode()) {
+		return std::string(utf8);
+	} else {
+		QString text = QString::fromUtf8(utf8.data(), static_cast<int>(utf8.length()));
+		QTextCodec *codec = QTextCodec::codecForName(
+				CharacterSetID(CharacterSetOfDocument()));
+		QByteArray ba = codec->fromUnicode(text);
+		return std::string(ba.data(), ba.length());
+	}
+}
 
 void ScintillaQt::ScrollText(Sci::Line linesToMove)
 {
@@ -309,12 +341,15 @@ void ScintillaQt::ReconfigureScrollBars()
 void ScintillaQt::CopyToModeClipboard(const SelectionText &selectedText, QClipboard::Mode clipboardMode_)
 {
 	QClipboard *clipboard = QApplication::clipboard();
-	clipboard->clear(clipboardMode_);
 	QString su = StringFromSelectedText(selectedText);
 	QMimeData *mimeData = new QMimeData();
 	mimeData->setText(su);
 	if (selectedText.rectangular) {
 		AddRectangularToMime(mimeData, su);
+	}
+
+	if (selectedText.lineCopy) {
+		AddLineCutCopyToMime(mimeData);
 	}
 
 	// Allow client code to add additional data (e.g rich text).
@@ -342,6 +377,7 @@ void ScintillaQt::PasteFromMode(QClipboard::Mode clipboardMode_)
 	QClipboard *clipboard = QApplication::clipboard();
 	const QMimeData *mimeData = clipboard->mimeData(clipboardMode_);
 	bool isRectangular = IsRectangularInMime(mimeData);
+	bool isLine = SelectionEmpty() && IsLineCutCopyInMime(mimeData);
 	QString text = clipboard->text(clipboardMode_);
 	QByteArray utext = BytesForDocument(text);
 	std::string dest(utext.constData(), utext.length());
@@ -350,8 +386,8 @@ void ScintillaQt::PasteFromMode(QClipboard::Mode clipboardMode_)
 
 	UndoGroup ug(pdoc);
 	ClearSelection(multiPasteMode == SC_MULTIPASTE_EACH);
-	InsertPasteShape(selText.Data(), static_cast<int>(selText.Length()),
-		selText.rectangular ? pasteRectangular : pasteStream);
+	InsertPasteShape(selText.Data(), selText.Length(),
+		isRectangular ? PasteShape::rectangular : (isLine ? PasteShape::line : PasteShape::stream));
 	EnsureCaretVisible();
 }
 
@@ -386,10 +422,12 @@ void ScintillaQt::NotifyChange()
 
 void ScintillaQt::NotifyFocus(bool focus)
 {
-	emit command(
-			Platform::LongFromTwoShorts
-					(GetCtrlID(), focus ? SCEN_SETFOCUS : SCEN_KILLFOCUS),
-			reinterpret_cast<sptr_t>(wMain.GetID()));
+	if (commandEvents) {
+		emit command(
+				Platform::LongFromTwoShorts
+						(GetCtrlID(), focus ? SCEN_SETFOCUS : SCEN_KILLFOCUS),
+				reinterpret_cast<sptr_t>(wMain.GetID()));
+	}
 
 	Editor::NotifyFocus(focus);
 }
@@ -401,30 +439,44 @@ void ScintillaQt::NotifyParent(SCNotification scn)
 	emit notifyParent(scn);
 }
 
-/**
-* Report that this Editor subclass has a working implementation of FineTickerStart.
-*/
-bool ScintillaQt::FineTickerAvailable()
+void ScintillaQt::NotifyURIDropped(const char *uri)
 {
-	return true;
+	SCNotification scn = {};
+	scn.nmhdr.code = SCN_URIDROPPED;
+	scn.text = uri;
+
+	NotifyParent(scn);
 }
 
 bool ScintillaQt::FineTickerRunning(TickReason reason)
 {
-	return timers[reason] != 0;
+	return timers[static_cast<size_t>(reason)] != 0;
 }
 
 void ScintillaQt::FineTickerStart(TickReason reason, int millis, int /* tolerance */)
 {
 	FineTickerCancel(reason);
-	timers[reason] = startTimer(millis);
+	timers[static_cast<size_t>(reason)] = startTimer(millis);
+}
+
+// CancelTimers cleans up all fine-ticker timers and is non-virtual to avoid warnings when
+// called during destruction.
+void ScintillaQt::CancelTimers()
+{
+	for (size_t tr = static_cast<size_t>(TickReason::caret); tr <= static_cast<size_t>(TickReason::dwell); tr++) {
+		if (timers[tr]) {
+			killTimer(timers[tr]);
+			timers[tr] = 0;
+		}
+	}
 }
 
 void ScintillaQt::FineTickerCancel(TickReason reason)
 {
-	if (timers[reason]) {
-		killTimer(timers[reason]);
-		timers[reason] = 0;
+	const size_t reasonIndex = static_cast<size_t>(reason);
+	if (timers[reasonIndex]) {
+		killTimer(timers[reasonIndex]);
+		timers[reasonIndex] = 0;
 	}
 }
 
@@ -436,7 +488,7 @@ void ScintillaQt::onIdle()
 	}
 }
 
-bool ScintillaQt::SetIdle(bool on)
+bool ScintillaQt::ChangeIdle(bool on)
 {
 	QTimer *qIdle;
 	if (on) {
@@ -454,12 +506,17 @@ bool ScintillaQt::SetIdle(bool on)
 			idler.state = false;
 			qIdle = static_cast<QTimer *>(idler.idlerID);
 			qIdle->stop();
-			disconnect(qIdle, SIGNAL(timeout()), 0, 0);
+			disconnect(qIdle, SIGNAL(timeout()), nullptr, nullptr);
 			delete qIdle;
-			idler.idlerID = 0;
+			idler.idlerID = {};
 		}
 	}
 	return true;
+}
+
+bool ScintillaQt::SetIdle(bool on)
+{
+	return ChangeIdle(on);
 }
 
 int ScintillaQt::CharacterSetOfDocument() const
@@ -521,46 +578,48 @@ public:
 	}
 };
 
-CaseFolder *ScintillaQt::CaseFolderForEncoding()
+std::unique_ptr<CaseFolder> ScintillaQt::CaseFolderForEncoding()
 {
 	if (pdoc->dbcsCodePage == SC_CP_UTF8) {
-		return new CaseFolderUnicode();
+		return std::make_unique<CaseFolderUnicode>();
 	} else {
 		const char *charSetBuffer = CharacterSetIDOfDocument();
 		if (charSetBuffer) {
 			if (pdoc->dbcsCodePage == 0) {
-				CaseFolderTable *pcf = new CaseFolderTable();
+				std::unique_ptr<CaseFolderTable> pcf = std::make_unique<CaseFolderTable>();
 				pcf->StandardASCII();
 				QTextCodec *codec = QTextCodec::codecForName(charSetBuffer);
 				// Only for single byte encodings
 				for (int i=0x80; i<0x100; i++) {
 					char sCharacter[2] = "A";
-					sCharacter[0] = i;
+					sCharacter[0] = static_cast<char>(i);
 					QString su = codec->toUnicode(sCharacter, 1);
 					QString suFolded = su.toCaseFolded();
-					QByteArray bytesFolded = codec->fromUnicode(suFolded);
-					if (bytesFolded.length() == 1) {
-						pcf->SetTranslation(sCharacter[0], bytesFolded[0]);
+					if (codec->canEncode(suFolded)) {
+						QByteArray bytesFolded = codec->fromUnicode(suFolded);
+						if (bytesFolded.length() == 1) {
+							pcf->SetTranslation(sCharacter[0], bytesFolded[0]);
+						}
 					}
 				}
 				return pcf;
 			} else {
-				return new CaseFolderDBCS(QTextCodec::codecForName(charSetBuffer));
+				return std::make_unique<CaseFolderDBCS>(QTextCodec::codecForName(charSetBuffer));
 			}
 		}
-		return 0;
+		return nullptr;
 	}
 }
 
-std::string ScintillaQt::CaseMapString(const std::string &s, int caseMapping)
+std::string ScintillaQt::CaseMapString(const std::string &s, CaseMapping caseMapping)
 {
-	if ((s.size() == 0) || (caseMapping == cmSame))
+	if ((s.size() == 0) || (caseMapping == CaseMapping::same))
 		return s;
 
 	if (IsUnicodeMode()) {
 		std::string retMapped(s.length() * maxExpansionCaseConversion, 0);
 		size_t lenMapped = CaseConvertString(&retMapped[0], retMapped.length(), s.c_str(), s.length(),
-			(caseMapping == cmUpper) ? CaseConversionUpper : CaseConversionLower);
+			(caseMapping == CaseMapping::upper) ? CaseConversion::upper : CaseConversion::lower);
 		retMapped.resize(lenMapped);
 		return retMapped;
 	}
@@ -568,7 +627,7 @@ std::string ScintillaQt::CaseMapString(const std::string &s, int caseMapping)
 	QTextCodec *codec = QTextCodec::codecForName(CharacterSetIDOfDocument());
 	QString text = codec->toUnicode(s.c_str(), static_cast<int>(s.length()));
 
-	if (caseMapping == cmUpper) {
+	if (caseMapping == CaseMapping::upper) {
 		text = text.toUpper();
 	} else {
 		text = text.toLower();
@@ -593,7 +652,7 @@ bool ScintillaQt::HaveMouseCapture()
 
 void ScintillaQt::StartDrag()
 {
-	inDragDrop = ddDragging;
+	inDragDrop = DragDrop::dragging;
 	dropWentOutside = true;
 	if (drag.Length()) {
 		QMimeData *mimeData = new QMimeData;
@@ -612,15 +671,40 @@ void ScintillaQt::StartDrag()
 			ClearSelection();
 		}
 	}
-	inDragDrop = ddNone;
+	inDragDrop = DragDrop::none;
 	SetDragPosition(SelectionPosition(Sci::invalidPosition));
 }
+
+class CallTipImpl : public QWidget {
+public:
+	CallTipImpl(CallTip *pct_)
+		: QWidget(nullptr, Qt::ToolTip),
+		  pct(pct_)
+	{
+#if QT_VERSION >= QT_VERSION_CHECK(5, 9, 0)
+		setWindowFlag(Qt::WindowTransparentForInput);
+#endif
+	}
+
+	void paintEvent(QPaintEvent *) override
+	{
+		if (pct->inCallTipMode) {
+			std::unique_ptr<Surface> surfaceWindow = Surface::Allocate(0);
+			surfaceWindow->Init(this);
+			surfaceWindow->SetMode(SurfaceMode(pct->codePage, false));
+			pct->PaintCT(surfaceWindow.get());
+		}
+	}
+
+private:
+	CallTip *pct;
+};
 
 void ScintillaQt::CreateCallTipWindow(PRectangle rc)
 {
 
 	if (!ct.wCallTip.Created()) {
-		QWidget *pCallTip =  new QWidget(0, Qt::ToolTip);
+		QWidget *pCallTip = new CallTipImpl(&ct);
 		ct.wCallTip = pCallTip;
 		pCallTip->move(rc.left, rc.top);
 		pCallTip->resize(rc.Width(), rc.Height());
@@ -667,12 +751,6 @@ sptr_t ScintillaQt::WndProc(unsigned int iMessage, uptr_t wParam, sptr_t lParam)
 		case SCI_GETDIRECTPOINTER:
 			return reinterpret_cast<sptr_t>(this);
 
-#ifdef SCI_LEXER
-		case SCI_LOADLEXERLIBRARY:
-			LexerManager::GetInstance()->Load(reinterpret_cast<const char *>(lParam));
-			break;
-#endif
-
 		default:
 			return ScintillaBase::WndProc(iMessage, wParam, lParam);
 		}
@@ -681,7 +759,7 @@ sptr_t ScintillaQt::WndProc(unsigned int iMessage, uptr_t wParam, sptr_t lParam)
 	} catch (...) {
 		errorStatus = SC_STATUS_FAILURE;
 	}
-	return 0l;
+	return 0;
 }
 
 sptr_t ScintillaQt::DefWndProc(unsigned int, uptr_t, sptr_t)
@@ -700,19 +778,19 @@ sptr_t ScintillaQt::DirectFunction(
 void ScintillaQt::PartialPaint(const PRectangle &rect)
 {
 	rcPaint = rect;
-	paintState = painting;
+	paintState = PaintState::painting;
 	PRectangle rcClient = GetClientRectangle();
 	paintingAllText = rcPaint.Contains(rcClient);
 
-	AutoSurface surface(this);
-	Paint(surface, rcPaint);
-	surface->Release();
+	AutoSurface surfacePaint(this);
+	Paint(surfacePaint, rcPaint);
+	surfacePaint->Release();
 
-	if (paintState == paintAbandoned) {
+	if (paintState == PaintState::abandoned) {
 		// FIXME: Failure to paint the requested rectangle in each
 		// paint event causes flicker on some platforms (Mac?)
 		// Paint rect immediately.
-		paintState = painting;
+		paintState = PaintState::painting;
 		paintingAllText = true;
 
 		AutoSurface surface(this);
@@ -723,7 +801,7 @@ void ScintillaQt::PartialPaint(const PRectangle &rect)
 		scrollArea->viewport()->update();
 	}
 
-	paintState = notPainting;
+	paintState = PaintState::notPainting;
 }
 
 void ScintillaQt::DragEnter(const Point &point)
@@ -756,11 +834,18 @@ void ScintillaQt::Drop(const Point &point, const QMimeData *data, bool move)
 	DropAt(movePos, bytes, len, move, rectangular);
 }
 
+void ScintillaQt::DropUrls(const QMimeData *data)
+{
+	foreach(const QUrl &url, data->urls()) {
+		NotifyURIDropped(url.toString().toUtf8().constData());
+	}
+}
+
 void ScintillaQt::timerEvent(QTimerEvent *event)
 {
-	for (TickReason tr=tickCaret; tr<=tickDwell; tr = static_cast<TickReason>(tr+1)) {
+	for (size_t tr=static_cast<size_t>(TickReason::caret); tr<=static_cast<size_t>(TickReason::dwell); tr++) {
 		if (timers[tr] == event->timerId()) {
-			TickFor(tr);
+			TickFor(static_cast<TickReason>(tr));
 		}
 	}
 }

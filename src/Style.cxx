@@ -6,37 +6,21 @@
 // The License.txt file describes the conditions under which this software may be distributed.
 
 #include <stdexcept>
+#include <string_view>
+#include <vector>
+#include <optional>
+#include <memory>
 
+#include "Debugging.h"
+#include "Geometry.h"
 #include "Platform.h"
 
 #include "Scintilla.h"
 #include "Style.h"
 
-#ifdef SCI_NAMESPACE
 using namespace Scintilla;
-#endif
 
-FontAlias::FontAlias() {
-}
-
-FontAlias::FontAlias(const FontAlias &other) : Font() {
-	SetID(other.fid);
-}
-
-FontAlias::~FontAlias() {
-	SetID(0);
-	// ~Font will not release the actual font resource since it is now 0
-}
-
-void FontAlias::MakeAlias(Font &fontOrigin) {
-	SetID(fontOrigin.GetID());
-}
-
-void FontAlias::ClearFont() {
-	SetID(0);
-}
-
-bool FontSpecification::operator==(const FontSpecification &other) const {
+bool FontSpecification::operator==(const FontSpecification &other) const noexcept {
 	return fontName == other.fontName &&
 	       weight == other.weight &&
 	       italic == other.italic &&
@@ -45,7 +29,7 @@ bool FontSpecification::operator==(const FontSpecification &other) const {
 	       extraFontFlag == other.extraFontFlag;
 }
 
-bool FontSpecification::operator<(const FontSpecification &other) const {
+bool FontSpecification::operator<(const FontSpecification &other) const noexcept {
 	if (fontName != other.fontName)
 		return fontName < other.fontName;
 	if (weight != other.weight)
@@ -61,11 +45,11 @@ bool FontSpecification::operator<(const FontSpecification &other) const {
 	return false;
 }
 
-FontMeasurements::FontMeasurements() {
-	Clear();
+FontMeasurements::FontMeasurements() noexcept {
+	ClearMeasurements();
 }
 
-void FontMeasurements::Clear() {
+void FontMeasurements::ClearMeasurements() noexcept {
 	ascent = 1;
 	descent = 1;
 	capitalHeight = 1;
@@ -76,14 +60,14 @@ void FontMeasurements::Clear() {
 
 Style::Style() : FontSpecification() {
 	Clear(ColourDesired(0, 0, 0), ColourDesired(0xff, 0xff, 0xff),
-	      Platform::DefaultFontSize() * SC_FONT_SIZE_MULTIPLIER, 0, SC_CHARSET_DEFAULT,
-	      SC_WEIGHT_NORMAL, false, false, false, caseMixed, true, true, false);
+	      Platform::DefaultFontSize() * SC_FONT_SIZE_MULTIPLIER, nullptr, SC_CHARSET_DEFAULT,
+	      SC_WEIGHT_NORMAL, false, false, false, CaseForce::mixed, true, true, false);
 }
 
-Style::Style(const Style &source) : FontSpecification(), FontMeasurements() {
+Style::Style(const Style &source) noexcept : FontSpecification(), FontMeasurements() {
 	Clear(ColourDesired(0, 0, 0), ColourDesired(0xff, 0xff, 0xff),
-	      0, 0, 0,
-	      SC_WEIGHT_NORMAL, false, false, false, caseMixed, true, true, false);
+	      0, nullptr, 0,
+	      SC_WEIGHT_NORMAL, false, false, false, CaseForce::mixed, true, true, false);
 	fore = source.fore;
 	back = source.back;
 	characterSet = source.characterSet;
@@ -102,12 +86,12 @@ Style::Style(const Style &source) : FontSpecification(), FontMeasurements() {
 Style::~Style() {
 }
 
-Style &Style::operator=(const Style &source) {
+Style &Style::operator=(const Style &source) noexcept {
 	if (this == &source)
 		return * this;
 	Clear(ColourDesired(0, 0, 0), ColourDesired(0xff, 0xff, 0xff),
-	      0, 0, SC_CHARSET_DEFAULT,
-	      SC_WEIGHT_NORMAL, false, false, false, caseMixed, true, true, false);
+	      0, nullptr, SC_CHARSET_DEFAULT,
+	      SC_WEIGHT_NORMAL, false, false, false, CaseForce::mixed, true, true, false);
 	fore = source.fore;
 	back = source.back;
 	characterSet = source.characterSet;
@@ -126,8 +110,8 @@ Style &Style::operator=(const Style &source) {
 void Style::Clear(ColourDesired fore_, ColourDesired back_, int size_,
         const char *fontName_, int characterSet_,
         int weight_, bool italic_, bool eolFilled_,
-        bool underline_, ecaseForced caseForce_,
-        bool visible_, bool changeable_, bool hotspot_) {
+        bool underline_, CaseForce caseForce_,
+        bool visible_, bool changeable_, bool hotspot_) noexcept {
 	fore = fore_;
 	back = back_;
 	characterSet = characterSet_;
@@ -141,11 +125,11 @@ void Style::Clear(ColourDesired fore_, ColourDesired back_, int size_,
 	visible = visible_;
 	changeable = changeable_;
 	hotspot = hotspot_;
-	font.ClearFont();
-	FontMeasurements::Clear();
+	font.reset();
+	FontMeasurements::ClearMeasurements();
 }
 
-void Style::ClearTo(const Style &source) {
+void Style::ClearTo(const Style &source) noexcept {
 	Clear(
 	    source.fore,
 	    source.back,
@@ -162,7 +146,7 @@ void Style::ClearTo(const Style &source) {
 	    source.hotspot);
 }
 
-void Style::Copy(Font &font_, const FontMeasurements &fm_) {
-	font.MakeAlias(font_);
+void Style::Copy(std::shared_ptr<Font> font_, const FontMeasurements &fm_) noexcept {
+	font = std::move(font_);
 	(FontMeasurements &)(*this) = fm_;
 }

@@ -2,19 +2,26 @@
 // All platform headers should be included before Scintilla headers
 // and each of these groups are then divided into directory groups.
 
+// Base of the repository relative to this file
+
+//base:..
+
+// File patterns to check:
+//source:include/*.h
+//source:src/*.cxx
+//source:lexlib/*.cxx
+//source:lexers/*.cxx
+//source:win32/*.cxx
+//source:gtk/*.cxx
+//source:cocoa/*.mm
+//source:cocoa/*.h
+//source:test/unit/*.cxx
+//source:lexilla/src/*.cxx
+//source:lexilla/test/*.cxx
+
 // C standard library
 #include <stddef.h>
-#include <stdlib.h>
 #include <stdint.h>
-#include <string.h>
-#include <stdio.h>
-#include <stdarg.h>
-#include <time.h>
-#include <math.h>
-#include <assert.h>
-#include <ctype.h>
-#include <limits.h>
-#include <sys/time.h>
 
 // C++ wrappers of C standard library
 #include <cstddef>
@@ -22,7 +29,6 @@
 #include <cstdint>
 #include <cassert>
 #include <cstring>
-#include <cctype>
 #include <cstdio>
 #include <cstdarg>
 #include <ctime>
@@ -33,19 +39,28 @@
 #include <stdexcept>
 #include <new>
 #include <string>
+#include <string_view>
 #include <vector>
-#include <deque>
 #include <map>
 #include <set>
 #include <forward_list>
+#include <optional>
 #include <algorithm>
+#include <iterator>
 #include <functional>
 #include <memory>
+#include <numeric>
+#include <chrono>
 #include <regex>
 #include <iostream>
 #include <sstream>
+#include <mutex>
 
-// GTK+ headers
+// POSIX
+#include <dlfcn.h>
+#include <sys/time.h>
+
+// GTK headers
 #include <glib.h>
 #include <gmodule.h>
 #include <gdk/gdk.h>
@@ -75,36 +90,22 @@
 
 // Non-platform-specific headers
 
-// include
+// src platform interface
+#include "Debugging.h"
+#include "Geometry.h"
 #include "Platform.h"
 
 #include "Sci_Position.h"
+#include "ILoader.h"
 #include "ILexer.h"
 #include "Scintilla.h"
 #include "ScintillaWidget.h"
 
-#include "SciLexer.h"
-
 // lexlib
-#include "StringCopy.h"
-#include "PropSetSimple.h"
-#include "WordList.h"
-#include "LexAccessor.h"
-#include "Accessor.h"
-#include "StyleContext.h"
 #include "CharacterSet.h"
 #include "CharacterCategory.h"
-#include "LexerModule.h"
-#include "OptionSet.h"
-#include "SparseState.h"
-#include "SubStyles.h"
-#include "LexerBase.h"
-#include "LexerSimple.h"
-#include "LexerNoExceptions.h"
 
 // src
-#include "Catalogue.h"
-
 #include "Position.h"
 #include "UniqueString.h"
 #include "SplitVector.h"
@@ -128,7 +129,7 @@
 #include "RESearch.h"
 #include "CaseConvert.h"
 #include "UniConversion.h"
-#include "UnicodeFromUTF8.h"
+#include "DBCS.h"
 #include "Selection.h"
 #include "PositionCache.h"
 #include "FontQuality.h"
@@ -136,17 +137,17 @@
 #include "MarginView.h"
 #include "EditView.h"
 #include "Editor.h"
+#include "ElapsedPeriod.h"
 
 #include "AutoComplete.h"
 #include "ScintillaBase.h"
-
-#include "ExternalLexer.h"
 
 // Platform-specific headers
 
 // win32
 #include "PlatWin.h"
 #include "HanjaDic.h"
+#include "ScintillaWin.h"
 
 // gtk
 #include "ScintillaGTK.h"

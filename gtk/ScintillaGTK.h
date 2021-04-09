@@ -6,13 +6,20 @@
 #ifndef SCINTILLAGTK_H
 #define SCINTILLAGTK_H
 
-#ifdef SCI_NAMESPACE
 namespace Scintilla {
-#endif
 
 class ScintillaGTKAccessible;
 
 #define OBJECT_CLASS GObjectClass
+
+struct FontOptions {
+	cairo_antialias_t antialias {};
+	cairo_subpixel_order_t order {};
+	cairo_hint_style_t hint {};
+	FontOptions() noexcept = default;
+	explicit FontOptions(GtkWidget *widget) noexcept;
+	bool operator==(const FontOptions &other) const noexcept;
+};
 
 class ScintillaGTK : public ScintillaBase {
 	friend class ScintillaGTKAccessible;
@@ -23,12 +30,14 @@ class ScintillaGTK : public ScintillaBase {
 	Window scrollbarh;
 	GtkAdjustment *adjustmentv;
 	GtkAdjustment *adjustmenth;
+	Window wSelection;
 	int verticalScrollBarWidth;
 	int horizontalScrollBarHeight;
 
 	SelectionText primary;
 
-	GdkEventButton *evbtn;
+	GdkEvent *evbtn;
+	guint buttonMouse;
 	bool capturedMouse;
 	bool dragWasDropped;
 	int lastKey;
@@ -36,25 +45,26 @@ class ScintillaGTK : public ScintillaBase {
 
 	GtkWidgetClass *parentClass;
 
-	static GdkAtom atomClipboard;
-	static GdkAtom atomUTF8;
-	static GdkAtom atomString;
-	static GdkAtom atomUriList;
-	static GdkAtom atomDROPFILES_DND;
+	static inline GdkAtom atomUTF8 {};
+	static inline GdkAtom atomUTF8Mime {};
+	static inline GdkAtom atomString {};
+	static inline GdkAtom atomUriList {};
+	static inline GdkAtom atomDROPFILES_DND {};
 	GdkAtom atomSought;
 
 #if PLAT_GTK_WIN32
 	CLIPFORMAT cfColumnSelect;
 #endif
 
+	bool preeditInitialized;
 	Window wPreedit;
 	Window wPreeditDraw;
 	GtkIMContext *im_context;
-	PangoScript lastNonCommonScript;
+	GUnicodeScript lastNonCommonScript;
 
 	// Wheel mouse support
 	unsigned int linesPerScroll;
-	GTimeVal lastWheelMouseTime;
+	gint64 lastWheelMouseTime;
 	gint lastWheelMouseDirection;
 	gint wheelMouseIntensity;
 	gdouble smoothScrollY;
@@ -68,6 +78,7 @@ class ScintillaGTK : public ScintillaBase {
 	bool repaintFullWindow;
 
 	guint styleIdleID;
+	FontOptions fontOptionsPrevious;
 	int accessibilityEnabled;
 	AtkObject *accessible;
 
@@ -75,10 +86,12 @@ public:
 	explicit ScintillaGTK(_ScintillaObject *sci_);
 	// Deleted so ScintillaGTK objects can not be copied.
 	ScintillaGTK(const ScintillaGTK &) = delete;
+	ScintillaGTK(ScintillaGTK &&) = delete;
 	ScintillaGTK &operator=(const ScintillaGTK &) = delete;
+	ScintillaGTK &operator=(ScintillaGTK &&) = delete;
 	virtual ~ScintillaGTK();
-	static ScintillaGTK *FromWidget(GtkWidget *widget);
-	static void ClassInit(OBJECT_CLASS* object_class, GtkWidgetClass *widget_class, GtkContainerClass *container_class);
+	static ScintillaGTK *FromWidget(GtkWidget *widget) noexcept;
+	static void ClassInit(OBJECT_CLASS *object_class, GtkWidgetClass *widget_class, GtkContainerClass *container_class);
 private:
 	void Init();
 	void Finalise() override;
@@ -86,9 +99,11 @@ private:
 	void DisplayCursor(Window::Cursor c) override;
 	bool DragThreshold(Point ptStart, Point ptNow) override;
 	void StartDrag() override;
-	int TargetAsUTF8(char *text);
-	int EncodedFromUTF8(char *utf8, char *encoded) const;
+	Sci::Position TargetAsUTF8(char *text) const;
+	Sci::Position EncodedFromUTF8(const char *utf8, char *encoded) const;
 	bool ValidCodePage(int codePage) const override;
+	std::string UTF8FromEncoded(std::string_view encoded) const override;
+	std::string EncodedFromUTF8(std::string_view utf8) const override;
 public: 	// Public for scintilla_send_message
 	sptr_t WndProc(unsigned int iMessage, uptr_t wParam, sptr_t lParam) override;
 private:
@@ -97,10 +112,9 @@ private:
 		TickReason reason;
 		ScintillaGTK *scintilla;
 		guint timer;
-		TimeThunk() : reason(tickCaret), scintilla(NULL), timer(0) {}
+		TimeThunk() noexcept : reason(TickReason::caret), scintilla(nullptr), timer(0) {}
 	};
-	TimeThunk timers[tickDwell+1];
-	bool FineTickerAvailable() override;
+	TimeThunk timers[static_cast<size_t>(TickReason::dwell)+1];
 	bool FineTickerRunning(TickReason reason) override;
 	void FineTickerStart(TickReason reason, int millis, int tolerance) override;
 	void FineTickerCancel(TickReason reason) override;
@@ -121,25 +135,34 @@ private:
 	void NotifyKey(int key, int modifiers);
 	void NotifyURIDropped(const char *list);
 	const char *CharacterSetID() const;
-	CaseFolder *CaseFolderForEncoding() override;
-	std::string CaseMapString(const std::string &s, int caseMapping) override;
+	std::unique_ptr<CaseFolder> CaseFolderForEncoding() override;
+	std::string CaseMapString(const std::string &s, CaseMapping caseMapping) override;
 	int KeyDefault(int key, int modifiers) override;
 	void CopyToClipboard(const SelectionText &selectedText) override;
 	void Copy() override;
+	void RequestSelection(GdkAtom atomSelection);
 	void Paste() override;
 	void CreateCallTipWindow(PRectangle rc) override;
 	void AddToPopUp(const char *label, int cmd = 0, bool enabled = true) override;
 	bool OwnPrimarySelection();
 	void ClaimSelection() override;
+	static bool IsStringAtom(GdkAtom type);
 	void GetGtkSelectionText(GtkSelectionData *selectionData, SelectionText &selText);
+	void InsertSelection(GtkClipboard *clipBoard, GtkSelectionData *selectionData);
+public:	// Public for SelectionReceiver
+	GObject *MainObject() const noexcept;
+	void ReceivedClipboard(GtkClipboard *clipBoard, GtkSelectionData *selection_data) noexcept;
+private:
 	void ReceivedSelection(GtkSelectionData *selection_data);
 	void ReceivedDrop(GtkSelectionData *selection_data);
 	static void GetSelection(GtkSelectionData *selection_data, guint info, SelectionText *text);
 	void StoreOnClipboard(SelectionText *clipText);
-	static void ClipboardGetSelection(GtkClipboard* clip, GtkSelectionData *selection_data, guint info, void *data);
-	static void ClipboardClearSelection(GtkClipboard* clip, void *data);
+	static void ClipboardGetSelection(GtkClipboard *clip, GtkSelectionData *selection_data, guint info, void *data);
+	static void ClipboardClearSelection(GtkClipboard *clip, void *data);
 
 	void UnclaimSelection(GdkEventSelection *selection_event);
+	static void PrimarySelection(GtkWidget *widget, GtkSelectionData *selection_data, guint info, guint time_stamp, ScintillaGTK *sciThis);
+	static gboolean PrimaryClear(GtkWidget *widget, GdkEventSelection *event, ScintillaGTK *sciThis);
 	void Resize(int width, int height);
 
 	// Callback functions
@@ -161,6 +184,7 @@ private:
 	static void GetPreferredHeight(GtkWidget *widget, gint *minimalHeight, gint *naturalHeight);
 #endif
 	static void SizeAllocate(GtkWidget *widget, GtkAllocation *allocation);
+	void CheckForFontOptionChange();
 #if GTK_CHECK_VERSION(3,0,0)
 	gboolean DrawTextThis(cairo_t *cr);
 	static gboolean DrawText(GtkWidget *widget, cairo_t *cr, ScintillaGTK *sciThis);
@@ -192,8 +216,8 @@ private:
 	gboolean ExposePreeditThis(GtkWidget *widget, GdkEventExpose *ose);
 	static gboolean ExposePreedit(GtkWidget *widget, GdkEventExpose *ose, ScintillaGTK *sciThis);
 #endif
-	AtkObject* GetAccessibleThis(GtkWidget *widget);
-	static AtkObject* GetAccessible(GtkWidget *widget);
+	AtkObject *GetAccessibleThis(GtkWidget *widget);
+	static AtkObject *GetAccessible(GtkWidget *widget);
 
 	bool KoreanIME();
 	void CommitThis(char *commitStr);
@@ -205,32 +229,32 @@ private:
 	void DrawImeIndicator(int indicator, int len);
 	void SetCandidateWindowPos();
 
-	static void StyleSetText(GtkWidget *widget, GtkStyle *previous, void*);
-	static void RealizeText(GtkWidget *widget, void*);
+	static void StyleSetText(GtkWidget *widget, GtkStyle *previous, void *);
+	static void RealizeText(GtkWidget *widget, void *);
 	static void Dispose(GObject *object);
 	static void Destroy(GObject *object);
 	static void SelectionReceived(GtkWidget *widget, GtkSelectionData *selection_data,
-	                              guint time);
+				      guint time);
 	static void SelectionGet(GtkWidget *widget, GtkSelectionData *selection_data,
-	                         guint info, guint time);
+				 guint info, guint time);
 	static gint SelectionClear(GtkWidget *widget, GdkEventSelection *selection_event);
 	gboolean DragMotionThis(GdkDragContext *context, gint x, gint y, guint dragtime);
 	static gboolean DragMotion(GtkWidget *widget, GdkDragContext *context,
-	                           gint x, gint y, guint dragtime);
+				   gint x, gint y, guint dragtime);
 	static void DragLeave(GtkWidget *widget, GdkDragContext *context,
-	                      guint time);
+			      guint time);
 	static void DragEnd(GtkWidget *widget, GdkDragContext *context);
 	static gboolean Drop(GtkWidget *widget, GdkDragContext *context,
-	                     gint x, gint y, guint time);
+			     gint x, gint y, guint time);
 	static void DragDataReceived(GtkWidget *widget, GdkDragContext *context,
-	                             gint x, gint y, GtkSelectionData *selection_data, guint info, guint time);
+				     gint x, gint y, GtkSelectionData *selection_data, guint info, guint time);
 	static void DragDataGet(GtkWidget *widget, GdkDragContext *context,
-	                        GtkSelectionData *selection_data, guint info, guint time);
+				GtkSelectionData *selection_data, guint info, guint time);
 	static gboolean TimeOut(gpointer ptt);
 	static gboolean IdleCallback(gpointer pSci);
 	static gboolean StyleIdle(gpointer pSci);
 	void IdleWork() override;
-	void QueueIdleWork(WorkNeeded::workItems items, Sci::Position upTo) override;
+	void QueueIdleWork(WorkItems items, Sci::Position upTo) override;
 	void SetDocPointer(Document *document) override;
 	static void PopUpCB(GtkMenuItem *menuItem, ScintillaGTK *sciThis);
 
@@ -242,7 +266,7 @@ private:
 	static gboolean PressCT(GtkWidget *widget, GdkEventButton *event, ScintillaGTK *sciThis);
 
 	static sptr_t DirectFunction(sptr_t ptr,
-	                             unsigned int iMessage, uptr_t wParam, sptr_t lParam);
+				     unsigned int iMessage, uptr_t wParam, sptr_t lParam);
 };
 
 // helper class to watch a GObject lifetime and get notified when it dies
@@ -253,18 +277,24 @@ class GObjectWatcher {
 		PLATFORM_ASSERT(obj == weakRef);
 
 		Destroyed();
-		weakRef = 0;
+		weakRef = nullptr;
 	}
 
 	static void WeakNotify(gpointer data, GObject *obj) {
-		static_cast<GObjectWatcher*>(data)->WeakNotifyThis(obj);
+		static_cast<GObjectWatcher *>(data)->WeakNotifyThis(obj);
 	}
 
 public:
 	GObjectWatcher(GObject *obj) :
-			weakRef(obj) {
+		weakRef(obj) {
 		g_object_weak_ref(weakRef, WeakNotify, this);
 	}
+
+	// Deleted so GObjectWatcher objects can not be copied.
+	GObjectWatcher(const GObjectWatcher&) = delete;
+	GObjectWatcher(GObjectWatcher&&) = delete;
+	GObjectWatcher&operator=(const GObjectWatcher&) = delete;
+	GObjectWatcher&operator=(GObjectWatcher&&) = delete;
 
 	virtual ~GObjectWatcher() {
 		if (weakRef) {
@@ -275,15 +305,13 @@ public:
 	virtual void Destroyed() {}
 
 	bool IsDestroyed() const {
-		return weakRef != 0;
+		return weakRef != nullptr;
 	}
 };
 
 std::string ConvertText(const char *s, size_t len, const char *charSetDest,
-                        const char *charSetSource, bool transliterations, bool silent=false);
+			const char *charSetSource, bool transliterations, bool silent=false);
 
-#ifdef SCI_NAMESPACE
 }
-#endif
 
 #endif

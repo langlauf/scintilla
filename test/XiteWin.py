@@ -1,10 +1,11 @@
+#!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-# Requires Python 2.7 or later
+# Requires Python 3.6 or later
 
 from __future__ import with_statement
 from __future__ import unicode_literals
 
-import os, sys, unittest
+import os, platform, sys, unittest
 
 import ctypes
 from ctypes import wintypes
@@ -18,6 +19,10 @@ from MessageNumbers import msgs, sgsm
 import ScintillaCallable
 import XiteMenu
 
+scintillaIncludesLexers = False
+# Lexilla may optionally be tested it is built and can be loaded
+lexillaAvailable = False
+
 scintillaDirectory = ".."
 scintillaIncludeDirectory = os.path.join(scintillaDirectory, "include")
 scintillaScriptsDirectory = os.path.join(scintillaDirectory, "scripts")
@@ -25,8 +30,22 @@ sys.path.append(scintillaScriptsDirectory)
 import Face
 
 scintillaBinDirectory = os.path.join(scintillaDirectory, "bin")
-os.environ['PATH'] = os.environ['PATH']  + ";" + scintillaBinDirectory
-#print(os.environ['PATH'])
+
+lexillaDirectory = os.path.join(scintillaDirectory, "..", "lexilla")
+lexillaBinDirectory = os.path.join(lexillaDirectory, "bin")
+lexillaIncludeDirectory = os.path.join(lexillaDirectory, "include")
+
+lexName = "Lexilla.DLL"
+try:
+	lexillaDLLPath = os.path.join(lexillaBinDirectory, lexName)
+	lexillaLibrary = ctypes.cdll.LoadLibrary(lexillaDLLPath)
+	createLexer = lexillaLibrary.CreateLexer
+	createLexer.restype = ctypes.c_void_p
+	lexillaAvailable = True
+	print("Found Lexilla")
+except OSError:
+	print("Can't find " + lexName)
+	print("Python is built for " + " ".join(platform.architecture()))
 
 WFUNC = ctypes.WINFUNCTYPE(c_int, HWND, c_uint, WPARAM, LPARAM)
 
@@ -143,12 +162,20 @@ class XiteWin():
 	def __init__(self, test=""):
 		self.face = Face.Face()
 		self.face.ReadFromFile(os.path.join(scintillaIncludeDirectory, "Scintilla.iface"))
+		try:
+			faceLex = Face.Face()
+			faceLex.ReadFromFile(os.path.join(lexillaIncludeDirectory, "LexicalStyles.iface"))
+			self.face.features.update(faceLex.features)
+		except FileNotFoundError:
+			print("Can't find " + "LexicalStyles.iface")
 
 		self.titleDirty = True
 		self.fullPath = ""
 		self.test = test
 
 		self.appName = "xite"
+
+		self.large = "-large" in sys.argv
 
 		self.cmds = {}
 		self.windowName = "XiteWindow"
@@ -158,7 +185,7 @@ class XiteWin():
 			WS_VISIBLE | WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN, \
 			0, 0, 500, 700, 0, 0, hinst, 0)
 
-		args = sys.argv[1:]
+		args = [a for a in sys.argv[1:] if not a.startswith("-")]
 		self.SetMenus()
 		if args:
 			self.GrabFile(args[0])
@@ -181,11 +208,16 @@ class XiteWin():
 
 	def OnCreate(self, hwnd):
 		self.win = hwnd
-		# Side effect: loads the DLL
+		if scintillaIncludesLexers:
+			sciName = "SciLexer.DLL"
+		else:
+			sciName = "Scintilla.DLL"
 		try:
-			x = ctypes.windll.SciLexer.Scintilla_DirectFunction
+			scintillaDLLPath = os.path.join(scintillaBinDirectory, sciName)
+			ctypes.cdll.LoadLibrary(scintillaDLLPath)
 		except OSError:
-			print("Can't find SciLexer.DLL")
+			print("Can't find " + sciName)
+			print("Python is built for " + " ".join(platform.architecture()))
 			sys.exit()
 		self.sciHwnd = user32.CreateWindowExW(0,
 			"Scintilla", "Source",
@@ -198,9 +230,20 @@ class XiteWin():
 		sciptr = c_char_p(user32.SendMessageW(self.sciHwnd,
 			int(self.face.features["GetDirectPointer"]["Value"], 0), 0,0))
 		self.ed = ScintillaCallable.ScintillaCallable(self.face, scifn, sciptr)
+		if self.large:
+			doc = self.ed.CreateDocument(10, 0x100)
+			self.ed.SetDocPointer(0, doc)
 
 		self.FocusOnEditor()
 
+	def ChooseLexer(self, lexer):
+		if scintillaIncludesLexers:
+			self.ed.LexerLanguage = lexer
+		elif lexillaAvailable:
+			pLexilla = createLexer(lexer)
+			self.ed.SetILexer(0, pLexilla)
+		else:	# No lexers available
+			pass
 
 	def Invalidate(self):
 		user32.InvalidateRect(self.win, 0, 0)

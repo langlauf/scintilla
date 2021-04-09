@@ -1,18 +1,23 @@
 // Unit Tests for Scintilla internal data structures
 
+#include <cstddef>
 #include <cstring>
 
 #include <stdexcept>
+#include <string_view>
 #include <vector>
+#include <optional>
 #include <algorithm>
 #include <memory>
 
-#include "Platform.h"
+#include "Debugging.h"
 
 #include "Position.h"
 #include "SplitVector.h"
 
 #include "catch.hpp"
+
+using namespace Scintilla;
 
 // Test SplitVector.
 
@@ -164,6 +169,27 @@ TEST_CASE("SplitVector") {
 		}
 	}
 
+	SECTION("InsertEmpty") {
+		sv.InsertEmpty(0, 0);
+		REQUIRE(0 == sv.Length());
+		int *pi = sv.InsertEmpty(0, 2);
+		REQUIRE(2 == sv.Length());
+		REQUIRE(0 == sv.ValueAt(0));
+		REQUIRE(0 == sv.ValueAt(1));
+		pi[0] = 4;
+		pi[1] = 5;
+		REQUIRE(4 == sv.ValueAt(0));
+		REQUIRE(5 == sv.ValueAt(1));
+		pi = sv.InsertEmpty(1, 2);
+		pi[0] = 6;
+		pi[1] = 7;
+		REQUIRE(4 == sv.Length());
+		REQUIRE(4 == sv.ValueAt(0));
+		REQUIRE(6 == sv.ValueAt(1));
+		REQUIRE(7 == sv.ValueAt(2));
+		REQUIRE(5 == sv.ValueAt(3));
+	}
+
 	SECTION("SetValue") {
 		sv.InsertValue(0, 10, 0);
 		sv.SetValueAt(5, 3);
@@ -272,8 +298,8 @@ TEST_CASE("SplitVector") {
 		for (int i=0; i<testLength; i++)
 			sv.SetValueAt(i, i+12);
 		REQUIRE(testLength == sv.Length());
-		for (int i=sv.Length()-1; i>=0; i--) {
-			sv.InsertValue(i, 1, i+5);
+		for (ptrdiff_t i=sv.Length()-1; i>=0; i--) {
+			sv.InsertValue(i, 1, static_cast<int>(i+5));
 			sv.Delete(i+1);
 		}
 		for (int i=0; i<sv.Length(); i++)
@@ -301,8 +327,8 @@ TEST_CASE("SplitVector") {
 		for (int i=0; i<10; i+=2) {
 			int len = 10 - i;
 			REQUIRE(len == sv.Length());
-			for (int i=0; i<sv.Length(); i++) {
-				REQUIRE(87 == sv.ValueAt(i));
+			for (int j=0; j<sv.Length(); j++) {
+				REQUIRE(87 == sv.ValueAt(j));
 			}
 			sv.Delete(len-1);
 			sv.Delete(0);

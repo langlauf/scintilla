@@ -1,15 +1,27 @@
 // UnitTester.cpp : Defines the entry point for the console application.
 //
 
+// Catch uses std::uncaught_exception which is deprecated in C++17.
+// This define silences a warning from Visual C++.
+#define _SILENCE_CXX17_UNCAUGHT_EXCEPTION_DEPRECATION_WARNING
+
 #include <cstdio>
 #include <cstdarg>
 
-#include "Platform.h"
+#include <string_view>
+#include <vector>
+#include <optional>
+#include <memory>
 
+#include "Debugging.h"
+
+#define CATCH_CONFIG_WINDOWS_CRTDBG
 #define CATCH_CONFIG_RUNNER
 #include "catch.hpp"
 
 // Needed for PLATFORM_ASSERT in code being tested
+
+namespace Scintilla {
 
 void Platform::Assert(const char *c, const char *file, int line) {
 	fprintf(stderr, "Assertion [%s] failed at %s %d\n", c, file, line);
@@ -25,10 +37,10 @@ void Platform::DebugPrintf(const char *format, ...) {
 	fprintf(stderr, "%s", buffer);
 }
 
-int main(int argc, char* const argv[]) {
-	const int result = Catch::Session().run(argc, argv);
+}
 
-	_CrtDumpMemoryLeaks();
+int main(int argc, char* argv[]) {
+	const int result = Catch::Session().run(argc, argv);
 
 	return result;
 }

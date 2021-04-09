@@ -21,14 +21,21 @@
 #include <cmath>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 #include <map>
+#include <set>
+#include <optional>
 #include <algorithm>
 #include <memory>
 
 #include "Scintilla.h"
+#include "Debugging.h"
+#include "Geometry.h"
 #include "Platform.h"
+#include "ILoader.h"
 #include "ILexer.h"
+#include "CharacterCategory.h"
 #include "Position.h"
 #include "UniqueString.h"
 #include "SplitVector.h"
@@ -39,7 +46,6 @@
 #include "CallTip.h"
 #include "KeyMap.h"
 #include "Indicator.h"
-#include "XPM.h"
 #include "LineMarker.h"
 #include "Style.h"
 #include "AutoComplete.h"
@@ -57,20 +63,15 @@
 #include "ScintillaBase.h"
 #include "CaseConvert.h"
 
-#ifdef SCI_LEXER
-#include "SciLexer.h"
-#include "PropSetSimple.h"
-#endif
-
 #include <QObject>
 #include <QAbstractScrollArea>
 #include <QAction>
 #include <QClipboard>
 #include <QPaintEvent>
 
-#ifdef SCI_NAMESPACE
+class ScintillaEditBase;
+
 namespace Scintilla {
-#endif
 
 class ScintillaQt : public QObject, public ScintillaBase {
 	Q_OBJECT
@@ -104,9 +105,11 @@ private:
 	void Finalise() override;
 	bool DragThreshold(Point ptStart, Point ptNow) override;
 	bool ValidCodePage(int codePage) const override;
+	std::string UTF8FromEncoded(std::string_view encoded) const override;
+	std::string EncodedFromUTF8(std::string_view utf8) const override;
 
 private:
-	void ScrollText(int linesToMove) override;
+	void ScrollText(Sci::Line linesToMove) override;
 	void SetVerticalScrollPos() override;
 	void SetHorizontalScrollPos() override;
 	bool ModifyScrollBars(Sci::Line nMax, Sci::Line nPage) override;
@@ -120,11 +123,13 @@ private:
 	void NotifyChange() override;
 	void NotifyFocus(bool focus) override;
 	void NotifyParent(SCNotification scn) override;
-	int timers[tickDwell+1];
-	bool FineTickerAvailable() override;
+	void NotifyURIDropped(const char *uri);
+	int timers[static_cast<size_t>(TickReason::dwell)+1];
 	bool FineTickerRunning(TickReason reason) override;
 	void FineTickerStart(TickReason reason, int millis, int tolerance) override;
+	void CancelTimers();
 	void FineTickerCancel(TickReason reason) override;
+	bool ChangeIdle(bool on);
 	bool SetIdle(bool on) override;
 	void SetMouseCapture(bool on) override;
 	bool HaveMouseCapture() override;
@@ -133,8 +138,8 @@ private:
 	const char *CharacterSetIDOfDocument() const;
 	QString StringFromDocument(const char *s) const;
 	QByteArray BytesForDocument(const QString &text) const;
-	CaseFolder *CaseFolderForEncoding() override;
-	std::string CaseMapString(const std::string &s, int caseMapping) override;
+	std::unique_ptr<CaseFolder> CaseFolderForEncoding() override;
+	std::string CaseMapString(const std::string &s, CaseMapping caseMapping) override;
 
 	void CreateCallTipWindow(PRectangle rc) override;
 	void AddToPopUp(const char *label, int cmd = 0, bool enabled = true) override;
@@ -152,6 +157,7 @@ protected:
 	void DragMove(const Point &point);
 	void DragLeave();
 	void Drop(const Point &point, const QMimeData *data, bool move);
+	void DropUrls(const QMimeData *data);
 
 	void timerEvent(QTimerEvent *event) override;
 
@@ -165,11 +171,9 @@ private:
 	bool dragWasDropped;
 	int rectangularSelectionModifier;
 
-	friend class ScintillaEditBase;
+	friend class ::ScintillaEditBase;
 };
 
-#ifdef SCI_NAMESPACE
 }
-#endif
 
 #endif // SCINTILLAQT_H

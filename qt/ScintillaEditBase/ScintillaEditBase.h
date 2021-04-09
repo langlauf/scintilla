@@ -12,21 +12,30 @@
 #ifndef SCINTILLAEDITBASE_H
 #define SCINTILLAEDITBASE_H
 
+#include <cstddef>
+
+#include <string_view>
+#include <vector>
+#include <optional>
+#include <memory>
+
+#include "Debugging.h"
+#include "Geometry.h"
 #include "Platform.h"
 #include "Scintilla.h"
 
 #include <QAbstractScrollArea>
 #include <QMimeData>
-#include <QTime>
+#include <QElapsedTimer>
 
-#ifdef SCI_NAMESPACE
 namespace Scintilla {
-#endif
 
 class ScintillaQt;
 class SurfaceImpl;
-struct SCNotification;
 
+}
+
+#ifndef EXPORT_IMPORT_API
 #ifdef WIN32
 #ifdef MAKING_LIBRARY
 #define EXPORT_IMPORT_API __declspec(dllexport)
@@ -37,6 +46,7 @@ struct SCNotification;
 #endif
 #else
 #define EXPORT_IMPORT_API
+#endif
 #endif
 
 class EXPORT_IMPORT_API ScintillaEditBase : public QAbstractScrollArea {
@@ -84,7 +94,7 @@ signals:
 	void modifyAttemptReadOnly();
 	void key(int key);
 	void doubleClick(int position, int line);
-	void updateUi();
+	void updateUi(int updated);
 	void modified(int type, int position, int length, int linesAdded,
 	              const QByteArray &text, int line, int foldNow, int foldPrev);
 	void macroRecord(int message, uptr_t wParam, sptr_t lParam);
@@ -93,7 +103,7 @@ signals:
 	void needShown(int position, int length);
 	void painted();
 	void userListSelection(); // Wants some args.
-	void uriDropped();        // Wants some args.
+	void uriDropped(const QString &uri);
 	void dwellStart(int x, int y);
 	void dwellEnd(int x, int y);
 	void zoom(int zoom);
@@ -102,6 +112,7 @@ signals:
 	void callTipClick();
 	void autoCompleteSelection(int position, const QString &text);
 	void autoCompleteCancelled();
+	void focusChanged(bool focused);
 
 	// Base notifications for compatibility with other Scintilla implementations
 	void notify(SCNotification *pscn);
@@ -135,9 +146,9 @@ protected:
 	void scrollContentsBy(int, int) override {}
 
 private:
-	ScintillaQt *sqt;
+	Scintilla::ScintillaQt *sqt;
 
-	QTime time;
+	QElapsedTimer time;
 
 	int preeditPos;
 	QString preeditString;
@@ -147,10 +158,7 @@ private:
 	static bool IsHangul(const QChar qchar);
 	void MoveImeCarets(int offset);
 	void DrawImeIndicator(int indicator, int len);
+	int ModifiersOfKeyboard() const;
 };
-
-#ifdef SCI_NAMESPACE
-}
-#endif
 
 #endif /* SCINTILLAEDITBASE_H */

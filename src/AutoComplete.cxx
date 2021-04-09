@@ -5,6 +5,7 @@
 // Copyright 1998-2003 by Neil Hodgson <neilh@scintilla.org>
 // The License.txt file describes the conditions under which this software may be distributed.
 
+#include <cstddef>
 #include <cstdlib>
 #include <cassert>
 #include <cstring>
@@ -12,10 +13,14 @@
 
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
+#include <optional>
 #include <algorithm>
 #include <memory>
 
+#include "Debugging.h"
+#include "Geometry.h"
 #include "Platform.h"
 
 #include "Scintilla.h"
@@ -23,9 +28,7 @@
 #include "Position.h"
 #include "AutoComplete.h"
 
-#ifdef SCI_NAMESPACE
 using namespace Scintilla;
-#endif
 
 AutoComplete::AutoComplete() :
 	active(false),
@@ -42,7 +45,7 @@ AutoComplete::AutoComplete() :
 	widthLBDefault(100),
 	heightLBDefault(100),
 	autoSort(SC_ORDER_PRESORTED) {
-	lb.reset(ListBox::Allocate());
+	lb = ListBox::Allocate();
 }
 
 AutoComplete::~AutoComplete() {
@@ -51,12 +54,12 @@ AutoComplete::~AutoComplete() {
 	}
 }
 
-bool AutoComplete::Active() const {
+bool AutoComplete::Active() const noexcept {
 	return active;
 }
 
 void AutoComplete::Start(Window &parent, int ctrlID,
-	Sci::Position position, Point location, int startLen_,
+	Sci::Position position, Point location, Sci::Position startLen_,
 	int lineHeight, bool unicodeMode, int technology) {
 	if (active) {
 		Cancel();
@@ -72,7 +75,7 @@ void AutoComplete::SetStopChars(const char *stopChars_) {
 	stopChars = stopChars_;
 }
 
-bool AutoComplete::IsStopChar(char ch) {
+bool AutoComplete::IsStopChar(char ch) const noexcept {
 	return ch && (stopChars.find(ch) != std::string::npos);
 }
 
@@ -80,7 +83,7 @@ void AutoComplete::SetFillUpChars(const char *fillUpChars_) {
 	fillUpChars = fillUpChars_;
 }
 
-bool AutoComplete::IsFillUpChar(char ch) {
+bool AutoComplete::IsFillUpChar(char ch) const noexcept {
 	return ch && (fillUpChars.find(ch) != std::string::npos);
 }
 
@@ -88,7 +91,7 @@ void AutoComplete::SetSeparator(char separator_) {
 	separator = separator_;
 }
 
-char AutoComplete::GetSeparator() const {
+char AutoComplete::GetSeparator() const noexcept {
 	return separator;
 }
 
@@ -96,7 +99,7 @@ void AutoComplete::SetTypesep(char separator_) {
 	typesep = separator_;
 }
 
-char AutoComplete::GetTypesep() const {
+char AutoComplete::GetTypesep() const noexcept {
 	return typesep;
 }
 
@@ -194,9 +197,7 @@ int AutoComplete::GetSelection() const {
 }
 
 std::string AutoComplete::GetValue(int item) const {
-	char value[maxItemLen];
-	lb->GetValue(item, value, sizeof(value));
-	return std::string(value);
+	return lb->GetValue(item);
 }
 
 void AutoComplete::Show(bool show) {
@@ -226,27 +227,26 @@ void AutoComplete::Move(int delta) {
 }
 
 void AutoComplete::Select(const char *word) {
-	size_t lenWord = strlen(word);
+	const size_t lenWord = strlen(word);
 	int location = -1;
 	int start = 0; // lower bound of the api array block to search
 	int end = lb->Length() - 1; // upper bound of the api array block to search
 	while ((start <= end) && (location == -1)) { // Binary searching loop
 		int pivot = (start + end) / 2;
-		char item[maxItemLen];
-		lb->GetValue(sortMatrix[pivot], item, maxItemLen);
+		std::string item = GetValue(sortMatrix[pivot]);
 		int cond;
 		if (ignoreCase)
-			cond = CompareNCaseInsensitive(word, item, lenWord);
+			cond = CompareNCaseInsensitive(word, item.c_str(), lenWord);
 		else
-			cond = strncmp(word, item, lenWord);
+			cond = strncmp(word, item.c_str(), lenWord);
 		if (!cond) {
 			// Find first match
 			while (pivot > start) {
-				lb->GetValue(sortMatrix[pivot-1], item, maxItemLen);
+				item = lb->GetValue(sortMatrix[pivot-1]);
 				if (ignoreCase)
-					cond = CompareNCaseInsensitive(word, item, lenWord);
+					cond = CompareNCaseInsensitive(word, item.c_str(), lenWord);
 				else
-					cond = strncmp(word, item, lenWord);
+					cond = strncmp(word, item.c_str(), lenWord);
 				if (0 != cond)
 					break;
 				--pivot;
@@ -256,12 +256,12 @@ void AutoComplete::Select(const char *word) {
 				&& ignoreCaseBehaviour == SC_CASEINSENSITIVEBEHAVIOUR_RESPECTCASE) {
 				// Check for exact-case match
 				for (; pivot <= end; pivot++) {
-					lb->GetValue(sortMatrix[pivot], item, maxItemLen);
-					if (!strncmp(word, item, lenWord)) {
+					item = lb->GetValue(sortMatrix[pivot]);
+					if (!strncmp(word, item.c_str(), lenWord)) {
 						location = pivot;
 						break;
 					}
-					if (CompareNCaseInsensitive(word, item, lenWord))
+					if (CompareNCaseInsensitive(word, item.c_str(), lenWord))
 						break;
 				}
 			}
@@ -279,12 +279,11 @@ void AutoComplete::Select(const char *word) {
 	} else {
 		if (autoSort == SC_ORDER_CUSTOM) {
 			// Check for a logically earlier match
-			char item[maxItemLen];
 			for (int i = location + 1; i <= end; ++i) {
-				lb->GetValue(sortMatrix[i], item, maxItemLen);
-				if (CompareNCaseInsensitive(word, item, lenWord))
+				std::string item = lb->GetValue(sortMatrix[i]);
+				if (CompareNCaseInsensitive(word, item.c_str(), lenWord))
 					break;
-				if (sortMatrix[i] < sortMatrix[location] && !strncmp(word, item, lenWord))
+				if (sortMatrix[i] < sortMatrix[location] && !strncmp(word, item.c_str(), lenWord))
 					location = i;
 			}
 		}
